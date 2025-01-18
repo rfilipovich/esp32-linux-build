@@ -1,5 +1,12 @@
 #! /bin/bash -x
 
+SCRIPT_NAME=${0##*/}
+readonly SCRIPT_VERSION="0.1"
+#### global variables ####
+readonly ABSOLUTE_FILENAME=`readlink -e "$0"`
+readonly ABSOLUTE_DIRECTORY=`dirname ${ABSOLUTE_FILENAME}`
+readonly SCRIPT_POINT=${ABSOLUTE_DIRECTORY}
+
 #
 # environment variables affecting the build:
 #
@@ -10,12 +17,18 @@
 # keep_etc=y		-- don't overwrite the /etc partition
 #
 
+#### DBG #####
+keep_toolchain=y
+keep_rootfs=y	
+keep_buildroot=y
+keep_bootloader=y
+
 SET_BAUDRATE='-b 2000000'
 
 CTNG_VER=xtensa-fdpic
 CTNG_CONFIG=xtensa-esp32s3-linux-uclibcfdpic
-BUILDROOT_VER=xtensa-2024.08-fdpic
-ESP_HOSTED_VER=ipc-5.1.1
+BUILDROOT_VER=xtensa-2024.08-fdpic-pressure_sniffer
+ESP_HOSTED_VER=ipc-5.1.1-pressure_sniffer
 ESP_HOSTED_CONFIG=sdkconfig.defaults.esp32s3
 
 function die()
@@ -39,7 +52,7 @@ while : ; do
 done
 
 if [ -z "$named_config" ] ; then
-	[ -f default.conf ] || { echo "Making devkit-c1-8m the default configuration" ; ln -s devkit-c1-8m.conf default.conf ; }
+	[ -f default.conf ] || { echo "Making pressure_sniffer the default configuration" ; ln -s pressure_sniffer.conf default.conf ; }
 	. default.conf || die "No config selected and default.conf couldn't be loaded"
 fi
 
@@ -94,7 +107,7 @@ fi
 # kernel and rootfs
 #
 if [ ! -d buildroot ] ; then
-	git clone https://github.com/jcmvbkbc/buildroot -b $BUILDROOT_VER
+	git clone https://github.com/rfilipovich/esp32_buildroot buildroot -b $BUILDROOT_VER
 else
 	pushd buildroot
 	git pull
@@ -106,13 +119,17 @@ if [ ! -d build-buildroot-$BUILDROOT_CONFIG ] ; then
 	buildroot/utils/config --file build-buildroot-$BUILDROOT_CONFIG/.config --set-str TOOLCHAIN_EXTERNAL_PREFIX '$(ARCH)-esp32s3-linux-uclibcfdpic'
 	buildroot/utils/config --file build-buildroot-$BUILDROOT_CONFIG/.config --set-str TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX '$(ARCH)-esp32s3-linux-uclibcfdpic'
 fi
+
+# uncomment for use dbg kernel!
+export LINUX_OVERRIDE_SRCDIR=`pwd`/kernel
+
 nice make -C buildroot O=`pwd`/build-buildroot-$BUILDROOT_CONFIG
 [ -f build-buildroot-$BUILDROOT_CONFIG/images/xipImage -a -f build-buildroot-$BUILDROOT_CONFIG/images/rootfs.cramfs -a -f build-buildroot-$BUILDROOT_CONFIG/images/etc.jffs2 ] || exit 1
 
 #
 # bootloader
 #
-[ -d esp-hosted ] || git clone https://github.com/jcmvbkbc/esp-hosted -b $ESP_HOSTED_VER
+[ -d esp-hosted ] || git clone https://github.com/rfilipovich/esp-hosted.git -b $ESP_HOSTED_VER
 pushd esp-hosted/esp_hosted_ng/esp/esp_driver
 cmake .
 cd esp-idf
@@ -130,9 +147,9 @@ popd
 #
 # flash
 #
-parttool.py $SET_BAUDRATE write_partition --partition-name linux  --input build-buildroot-$BUILDROOT_CONFIG/images/xipImage
-parttool.py $SET_BAUDRATE write_partition --partition-name rootfs --input build-buildroot-$BUILDROOT_CONFIG/images/rootfs.cramfs
+parttool.py $SET_BAUDRATE write_partition --partition-name linux  --input ${SCRIPT_POINT}/build/build-buildroot-$BUILDROOT_CONFIG/images/xipImage
+parttool.py $SET_BAUDRATE write_partition --partition-name rootfs --input ${SCRIPT_POINT}/build/build-buildroot-$BUILDROOT_CONFIG/images/rootfs.cramfs
 if [ -z "$keep_etc" ] ; then
 	read -p 'ready to flash /etc... press enter'
-	parttool.py $SET_BAUDRATE write_partition --partition-name etc --input build-buildroot-$BUILDROOT_CONFIG/images/etc.jffs2
+	parttool.py $SET_BAUDRATE write_partition --partition-name etc --input ${SCRIPT_POINT}/build/build-buildroot-$BUILDROOT_CONFIG/images/etc.jffs2
 fi
